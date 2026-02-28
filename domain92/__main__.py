@@ -18,7 +18,8 @@ from importlib.metadata import version
 import lolpython
 import time
 import random_header_generator
-import temp_mails
+from tempmail import TempMail  # CHANGED: Replaced temp_mails with tempmail
+
 headergen = random_header_generator.HeaderGenerator()
 parser = argparse.ArgumentParser(
     description="Automatically creates links for an ip on freedns"
@@ -323,11 +324,13 @@ def login():
                 checkprint("showing captcha")
                 image.show()
                 capcha = input("Enter the captcha code: ")
+            
+            # CHANGED: Email handling with tempmail module
             checkprint("generating email")
-            mail = temp_mails.Generator_email()
-            print('using mail provider: '+ mail.__class__.__name__ )
-            email = mail.email
-            checkprint("email address generated email: " + email)
+            mail = TempMail()  # FIXED: Using correct module
+            email = mail.get_email_address()
+            checkprint(f"email address generated: {email}")
+            
             checkprint("creating account")
             username = generate_random_string(random.randint(8, 13))
             password = generate_random_string(random.randint(10, 15))
@@ -341,33 +344,54 @@ def login():
             )
             checkprint("activation email sent")
             checkprint("waiting for email")
-            text = mail.wait_for_new_email(timeout=30)
-            if not text:
+            
+            # CHANGED: Wait for email using tempmail
+            import time as time_module
+            wait_start = time_module.time()
+            inbox = []
+            while time_module.time() - wait_start < 30:
+                inbox = mail.get_mailbox(email)
+                if inbox:
+                    break
+                time_module.sleep(2)
+            
+            if not inbox:
                 checkprint("no email received, trying again")
                 continue
+            
             checkprint("email received, getting content")
-            content = str(mail.get_mail_content(mail_id=text["id"]))
-            if content:
-                checkprint("email content found")
-            if text:
-                checkprint("email received")
-                match = re.search(r'\?([^">]+)"', content)
+            content = inbox[0].get('mail_text_only', '') or inbox[0].get('mail_html', '')
+            
+            # Improved activation link extraction
+            match = None
+            patterns = [
+                r'https?://[^\s]+?activation[^\s]*\?([^\s"\'<>]+)',
+                r'activate\.php\?([a-zA-Z0-9]+)',
+                r'verification[=/]([a-zA-Z0-9]+)',
+                r'confirm[=/]([a-zA-Z0-9]+)',
+                r'\?([a-zA-Z0-9]{20,})'
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, content)
                 if match:
-                    checkprint("code found")
-                    checkprint("verification code: " + match.group(1))
-                    checkprint("activating account")
-                    client.activate_account(match.group(1))
-                    checkprint("account activated")
-                    time.sleep(1)
-                    checkprint("attempting login")
-                    client.login(email, password)
-                    checkprint("login successful")
-                else:
-                    checkprint(
-                        "no match in email! you should generally never get this."
-                    )
-                    checkprint("error!")
-                    continue
+                    break
+            
+            if match:
+                checkprint("code found")
+                checkprint("verification code: " + match.group(1))
+                checkprint("activating account")
+                client.activate_account(match.group(1))
+                checkprint("account activated")
+                time_module.sleep(1)
+                checkprint("attempting login")
+                client.login(email, password)
+                checkprint("login successful")
+            else:
+                checkprint("no verification link found in email!")
+                checkprint("email content preview: " + content[:200])
+                continue
+                
         except KeyboardInterrupt:
             sys.exit()
         except Exception as e:
@@ -381,7 +405,7 @@ def login():
                     with Controller.from_port(port=9051) as controller:
                         controller.authenticate()
                         controller.signal(Signal.NEWNYM)
-                        time.sleep(controller.get_newnym_wait())
+                        time_module.sleep(controller.get_newnym_wait())
                         checkprint("tor identity changed")
                 except Exception as e:
                     checkprint("Got error while changing tor identity: " + repr(e))
